@@ -1,106 +1,131 @@
 package user
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 
-	"github.com/gorilla/mux"
+	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 )
 
-func CriarUsuario(w http.ResponseWriter, r *http.Request) {
-	var usuario User
-	if err := json.NewDecoder(r.Body).Decode(&usuario); err != nil {
-		http.Error(w, "JSON inválido", http.StatusBadRequest)
+// CreateUser handles POST requests to create a new user.
+// Validates input data, generates password hash and persists to database.
+func CreateUser(c *gin.Context) {
+	var user User
+	if err := c.ShouldBindJSON(&user); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
 		return
 	}
 
-	if err := Create(&usuario); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if user.Password == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Password is required"})
 		return
 	}
 
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(usuario)
-}
-
-func ListUsuarios(w http.ResponseWriter, r *http.Request) {
-	usuarios, err := Listar()
+	hash, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error generating password hash"})
+		return
+	}
+	user.Password = string(hash)
+
+	if err := Create(&user); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(usuarios)
+	user.Password = ""
+	c.JSON(http.StatusCreated, user)
 }
 
-func BuscarUsuarioPorId(w http.ResponseWriter, r *http.Request) {
-	params := mux.Vars(r)
-	idStr := params["id"]
+// ListUsers handles GET requests to return all registered users.
+func ListUsers(c *gin.Context) {
+	users, err := List()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, users)
+}
 
+// GetUserById handles GET requests to find a specific user by ID.
+func GetUserById(c *gin.Context) {
+	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		http.Error(w, "ID inválido", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
 		return
 	}
 
-	usuario, err := FindById(id)
+	user, err := FindById(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
-
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(usuario)
+	c.JSON(http.StatusOK, user)
 }
 
-func AtualizarUsuario(w http.ResponseWriter, r *http.Request) {
-	params := mux.Vars(r)
-	idStr := params["id"]
-
+// UpdateUser handles PUT requests to update an existing user's data.
+func UpdateUser(c *gin.Context) {
+	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		http.Error(w, "ID inválido", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
 		return
 	}
 
-	var dadosAtualizados User
-	if err := json.NewDecoder(r.Body).Decode(&dadosAtualizados); err != nil {
-		http.Error(w, "JSON inválido", http.StatusBadRequest)
+	var updatedData User
+	if err := c.ShouldBindJSON(&updatedData); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
 		return
 	}
 
-	usuarioAtualizado, err := Update(id, &dadosAtualizados)
+	updatedUser, err := Update(id, &updatedData)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(usuarioAtualizado)
+	c.JSON(http.StatusOK, updatedUser)
 }
 
-func DeletarUsuario(w http.ResponseWriter, r *http.Request) {
-	params := mux.Vars(r)
-	idStr := params["id"]
-
+// DeleteUser handles DELETE requests to remove a user from the system.
+func DeleteUser(c *gin.Context) {
+	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		http.Error(w, "ID inválido", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
 		return
 	}
 
 	err = Delete(id)
 	if err != nil {
-		if strings.Contains(err.Error(), "não encontrado") {
-			http.Error(w, err.Error(), http.StatusNotFound)
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		}
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	c.Status(http.StatusNoContent)
+}
+
+// LoginUser handles POST requests for user authentication.
+// Validates credentials and returns JWT token on success.
+func LoginUser(c *gin.Context) {
+	var loginReq LoginRequest
+	if err := c.ShouldBindJSON(&loginReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
+		return
+	}
+
+	response, err := Login(loginReq.Email, loginReq.Password)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
 }

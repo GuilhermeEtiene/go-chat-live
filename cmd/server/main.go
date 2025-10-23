@@ -1,40 +1,82 @@
+// Package main implements the REST API server for the chat application.
+// This server handles user management, authentication and CRUD operations.
 package main
 
 import (
 	"log"
-	"net/http"
 	"os"
 
 	"go-chat-live/internal/database"
 	"go-chat-live/internal/user"
 
-	"github.com/gorilla/mux"
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
 
+// main initializes and starts the REST API server with database connection,
+// CORS middleware, and user management routes.
 func main() {
-	// Carregar variáveis do .env
-	err := godotenv.Load()
-	if err != nil {
-		log.Println("Aviso: erro ao carregar .env, usando variáveis do sistema")
-	}
+	loadEnvironmentVariables()
+	setupDatabase()
 
+	router := setupRouter()
+	setupRoutes(router)
+
+	startServer(router)
+}
+
+// loadEnvironmentVariables loads configuration from .env file
+func loadEnvironmentVariables() {
+	err := godotenv.Load("../../.env")
+	if err != nil {
+		log.Println("Warning: could not load .env file, using system variables")
+	}
+}
+
+// setupDatabase initializes database connection and runs migrations
+func setupDatabase() {
 	database.ConnectDB()
 	database.DB.AutoMigrate(&user.User{})
+}
 
-	r := mux.NewRouter()
+// setupRouter creates Gin router with CORS middleware
+func setupRouter() *gin.Engine {
+	r := gin.Default()
 
-	r.HandleFunc("/users", user.CriarUsuario).Methods("POST")
-	r.HandleFunc("/users", user.ListUsuarios).Methods("GET")
-	r.HandleFunc("/users/{id}", user.BuscarUsuarioPorId).Methods("GET")
-	r.HandleFunc("/users/{id}", user.AtualizarUsuario).Methods("PUT")
-	r.HandleFunc("/users/{id}", user.DeletarUsuario).Methods("DELETE")
+	// CORS middleware for cross-origin requests
+	r.Use(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+
+		c.Next()
+	})
+
+	return r
+}
+
+// setupRoutes defines all API endpoints for user management
+func setupRoutes(r *gin.Engine) {
+	r.POST("/users", user.CreateUser)
+	r.POST("/login", user.LoginUser)
+	r.GET("/users", user.ListUsers)
+	r.GET("/users/:id", user.GetUserById)
+	r.PUT("/users/:id", user.UpdateUser)
+	r.DELETE("/users/:id", user.DeleteUser)
+}
+
+// startServer starts the HTTP server on configured port
+func startServer(r *gin.Engine) {
 	port := os.Getenv("REST_PORT")
 	if port == "" {
-		port = "8080" // padrão se variável não existir
+		port = "8080"
 	}
 
-	log.Println("Servidor REST rodando em localhost:" + port)
-	http.ListenAndServe(":"+port, r)
+	log.Printf("REST API server starting on port %s", port)
+	r.Run(":" + port)
 }

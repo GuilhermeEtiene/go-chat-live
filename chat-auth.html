@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <title>Chat WebSocket com Login</title>
+  <style>
+    body { 
+      font-family: Arial; 
+      max-width: 600px; 
+      margin: 0 auto; 
+      padding: 20px; 
+    }
+    .login-form, .chat-container { 
+      border: 1px solid #ddd; 
+      padding: 20px; 
+      margin-bottom: 20px; 
+      border-radius: 8px; 
+    }
+    .chat-container { display: none; }
+    #chat { 
+      border: 1px solid #ccc; 
+      height: 300px; 
+      overflow-y: auto; 
+      margin-bottom: 10px; 
+      padding: 10px; 
+      background-color: #f9f9f9;
+    }
+    #msg { width: 70%; padding: 8px; }
+    .send-btn, .login-btn, .register-btn { 
+      padding: 8px 15px; 
+      background-color: #007bff; 
+      color: white; 
+      border: none; 
+      border-radius: 4px; 
+      cursor: pointer; 
+    }
+    .send-btn:disabled { background-color: #ccc; }
+    .message { margin-bottom: 8px; }
+    .message .user { font-weight: bold; color: #007bff; }
+    .message .content { margin-left: 10px; }
+    .your-message { color: #28a745; }
+    .error { color: red; margin-top: 10px; }
+    .success { color: green; margin-top: 10px; }
+    .user-info { 
+      background-color: #e9ecef; 
+      padding: 10px; 
+      margin-bottom: 15px; 
+      border-radius: 4px; 
+    }
+    input[type="text"], input[type="email"], input[type="password"] {
+      width: 100%;
+      padding: 8px;
+      margin: 5px 0 10px 0;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    .form-tabs {
+      display: flex;
+      margin-bottom: 20px;
+    }
+    .tab {
+      padding: 10px 20px;
+      background-color: #f8f9fa;
+      border: 1px solid #ddd;
+      cursor: pointer;
+      flex: 1;
+      text-align: center;
+    }
+    .tab.active {
+      background-color: #007bff;
+      color: white;
+    }
+    .form-content {
+      display: none;
+    }
+    .form-content.active {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <h1>Chat WebSocket com Autenticação</h1>
+
+  <!-- Formulário de Login/Cadastro -->
+  <div class="login-form" id="authForm">
+    <div class="form-tabs">
+      <div class="tab active" onclick="switchTab('login')">Login</div>
+      <div class="tab" onclick="switchTab('register')">Cadastro</div>
+    </div>
+
+    <div id="loginForm" class="form-content active">
+      <h3>Fazer Login</h3>
+      <input type="email" id="loginEmail" placeholder="Email">
+      <input type="password" id="loginPassword" placeholder="Senha">
+      <button class="login-btn" onclick="login()">Entrar</button>
+    </div>
+
+    <div id="registerForm" class="form-content">
+      <h3>Criar Conta</h3>
+      <input type="text" id="registerName" placeholder="Nome">
+      <input type="email" id="registerEmail" placeholder="Email">
+      <input type="password" id="registerPassword" placeholder="Senha">
+      <button class="register-btn" onclick="register()">Cadastrar</button>
+    </div>
+
+    <div id="authMessage"></div>
+  </div>
+
+  <!-- Container do Chat -->
+  <div class="chat-container" id="chatContainer">
+    <div class="user-info" id="userInfo"></div>
+    
+    <label>
+      Sala:
+      <input type="text" id="room" value="sala1">
+      <button onclick="connect()" id="connectBtn">Entrar na Sala</button>
+      <button onclick="disconnect()" id="disconnectBtn" style="display: none;">Sair</button>
+    </label>
+    
+    <div id="chat"></div>
+    
+    <div>
+      <input type="text" id="msg" placeholder="Digite sua mensagem..." disabled>
+      <button onclick="sendMsg()" id="sendBtn" class="send-btn" disabled>Enviar</button>
+    </div>
+  </div>
+
+  <script>
+    let ws;
+    let token = '';
+    let currentUser = {};
+
+    function switchTab(tab) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.form-content').forEach(f => f.classList.remove('active'));
+      
+      if (tab === 'login') {
+        document.querySelector('.tab:first-child').classList.add('active');
+        document.getElementById('loginForm').classList.add('active');
+      } else {
+        document.querySelector('.tab:last-child').classList.add('active');
+        document.getElementById('registerForm').classList.add('active');
+      }
+      clearMessage();
+    }
+
+    async function register() {
+      const name = document.getElementById('registerName').value;
+      const email = document.getElementById('registerEmail').value;
+      const password = document.getElementById('registerPassword').value;
+
+      if (!name || !email || !password) {
+        showMessage('Preencha todos os campos', 'error');
+        return;
+      }
+
+      try {
+        const response = await fetch('http://localhost:8080/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, email, password })
+        });
+
+        const data = await response.json();
+        
+        if (response.ok) {
+          showMessage('Conta criada com sucesso! Faça login.', 'success');
+          switchTab('login');
+          document.getElementById('loginEmail').value = email;
+        } else {
+          showMessage(data.error || 'Erro ao criar conta', 'error');
+        }
+      } catch (error) {
+        showMessage('Erro de conexão', 'error');
+      }
+    }
+
+    async function login() {
+      const email = document.getElementById('loginEmail').value;
+      const password = document.getElementById('loginPassword').value;
+
+      if (!email || !password) {
+        showMessage('Preencha email e senha', 'error');
+        return;
+      }
+
+      try {
+        const response = await fetch('http://localhost:8080/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+
+        const data = await response.json();
+        
+        if (response.ok) {
+          token = data.token;
+          currentUser = data.user;
+          showChatInterface();
+        } else {
+          showMessage(data.error || 'Erro no login', 'error');
+        }
+      } catch (error) {
+        showMessage('Erro de conexão', 'error');
+      }
+    }
+
+    function showChatInterface() {
+      document.getElementById('authForm').style.display = 'none';
+      document.getElementById('chatContainer').style.display = 'block';
+      document.getElementById('userInfo').innerHTML = 
+        `<strong>Logado como:</strong> ${currentUser.name} (${currentUser.email})`;
+    }
+
+    function connect() {
+      const room = document.getElementById('room').value;
+      if (!room || !token) {
+        log('Erro: Sala ou token inválido');
+        return;
+      }
+
+      ws = new WebSocket(`ws://localhost:8081/ws?room=${encodeURIComponent(room)}&token=${encodeURIComponent(token)}`);
+      
+      ws.onopen = () => {
+        document.getElementById('msg').disabled = false;
+        document.getElementById('sendBtn').disabled = false;
+        document.getElementById('connectBtn').style.display = 'none';
+        document.getElementById('disconnectBtn').style.display = 'inline';
+        log(`🟢 Conectado à sala: ${room}`);
+      };
+      
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          log(`<span class="user">${data.userName}:</span><span class="content">${data.content}</span>`);
+        } catch (e) {
+          log(`Mensagem recebida: ${event.data}`);
+        }
+      };
+      
+      ws.onclose = () => {
+        log('🔴 Desconectado');
+        document.getElementById('msg').disabled = true;
+        document.getElementById('sendBtn').disabled = true;
+        document.getElementById('connectBtn').style.display = 'inline';
+        document.getElementById('disconnectBtn').style.display = 'none';
+      };
+      
+      ws.onerror = (e) => {
+        log('❌ Erro na conexão: ' + (e.message || 'Conexão falhou'));
+      };
+    }
+
+    function disconnect() {
+      if (ws) {
+        ws.close();
+      }
+    }
+
+    function sendMsg() {
+      const msg = document.getElementById('msg').value.trim();
+      if (ws && ws.readyState === 1 && msg) {
+        ws.send(msg);
+        log(`<span class="your-message"><strong>Você:</strong> ${msg}</span>`);
+        document.getElementById('msg').value = '';
+      }
+    }
+
+    function log(text) {
+      const chat = document.getElementById('chat');
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message';
+      messageDiv.innerHTML = text;
+      chat.appendChild(messageDiv);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function showMessage(text, type) {
+      const messageDiv = document.getElementById('authMessage');
+      messageDiv.innerHTML = text;
+      messageDiv.className = type;
+    }
+
+    function clearMessage() {
+      document.getElementById('authMessage').innerHTML = '';
+    }
+
+    // Enter key handlers
+    document.getElementById('msg').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') sendMsg();
+    });
+
+    document.getElementById('loginPassword').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') login();
+    });
+
+    document.getElementById('registerPassword').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') register();
+    });
+  </script>
+</body>
+</html>
